@@ -1,86 +1,86 @@
 #!/usr/bin/env bash
-
+source <(curl -s https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 # Copyright (c) 2021-2025 tteck
-# Author: tteck (tteckster)
-# Co-Author: MickLesk (Canbiz)
-# License: MIT
-# https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
-# Source: https://github.com/ajnart/homarr
+# Author: tteck (tteckster) | Co-Author: MickLesk (Canbiz)
+# License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://homarr.dev/
 
-source /dev/stdin <<< "$FUNCTIONS_FILE_PATH"
+# App Default Values
+APP="Homarr"
+var_tags="arr;dashboard"
+var_cpu="2"
+var_ram="2048"
+var_disk="8"
+var_os="debian"
+var_version="12"
+var_unprivileged="1"
+
+# App Output & Base Settings
+header_info "$APP"
+base_settings
+
+# Core
+variables
 color
-verb_ip6
 catch_errors
-setting_up_container
-network_check
-update_os
 
-msg_info "Installing Dependencies"
-$STD apt-get install -y \
-  sudo \
-  mc \
-  curl \
-  ca-certificates \
-  gnupg \
-  make \
-  g++ \
-  build-essential
-msg_ok "Installed Dependencies"
+function update_script() {
+  header_info
+  check_container_storage
+  check_container_resources
+  if [[ ! -d /opt/homarr ]]; then
+    msg_error "No ${APP} Installation Found!"
+    exit
+  fi
+  RELEASE=$(curl -s https://api.github.com/repos/homarr-labs/homarr/releases/latest | grep "tag_name" | awk '{print substr($2, 3, length($2)-4) }')
+  if [[ ! -f /opt/${APP}_version.txt ]] || [[ "${RELEASE}" != "$(cat /opt/${APP}_version.txt)" ]]; then
+    msg_info "Stopping Services"
+    systemctl stop homarr
+    msg_ok "Services Stopped"
 
-msg_info "Setting up Node.js Repository"
-mkdir -p /etc/apt/keyrings
-curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
-echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" >/etc/apt/sources.list.d/nodesource.list
-msg_ok "Set up Node.js Repository"
+    msg_info "Backing up Data"
+    mkdir -p /opt/homarr-data-backup
+    cp /opt/homarr/.env /opt/homarr-data-backup/.env
+    cp /opt/homarr/database/db.sqlite /opt/homarr-data-backup/db.sqlite
+    cp -r /opt/homarr/data/configs /opt/homarr-data-backup/configs
+    msg_ok "Backed up Data"
 
-msg_info "Installing Node.js/Yarn"
-$STD apt-get update
-$STD apt-get install -y nodejs
-$STD npm install -g yarn
-msg_ok "Installed Node.js/Yarn"
+    msg_info "Updating ${APP} to ${RELEASE}"
+    wget -q "https://github.com/homarr-labs/homarr/archive/refs/tags/v${RELEASE}.zip"
+    unzip -q v${RELEASE}.zip
+    rm -rf v${RELEASE}.zip
+    rm -rf /opt/homarr
+    mv homarr-${RELEASE} /opt/homarr
+    mv /opt/homarr-data-backup/.env /opt/homarr/.env
+    cd /opt/homarr
+    yarn install &>/dev/null
+    yarn build &>/dev/null
+    echo "${RELEASE}" >/opt/${APP}_version.txt
+    msg_ok "Updated ${APP}"
 
-msg_info "Installing Homarr (Patience)"
-RELEASE=$(curl -s https://api.github.com/repos/homarr-labs/homarr/releases/latest | grep "tag_name" | awk '{print substr($2, 3, length($2)-4) }')
-wget -q "https://github.com/homarr-labs/homarr/archive/refs/tags/v${RELEASE}.zip"
-unzip -q v${RELEASE}.zip
-rm -rf v${RELEASE}.zip
-mv homarr-${RELEASE} /opt/homarr
-cat <<EOF >/opt/homarr/.env
-DATABASE_URL="file:./database/db.sqlite"
-NEXTAUTH_URL="http://localhost:3000"
-NEXTAUTH_SECRET="$(openssl rand -base64 32)"
-NEXT_PUBLIC_DISABLE_ANALYTICS="true"
-DEFAULT_COLOR_SCHEME="dark"
-EOF
-cd /opt/homarr
-$STD yarn install
-$STD yarn build
-$STD yarn db:migrate
-echo "${RELEASE}" >"/opt/${APPLICATION}_version.txt"
-msg_ok "Installed Homarr"
+    msg_info "Restoring Data"
+    rm -rf /opt/homarr/data/configs
+    mv /opt/homarr-data-backup/configs /opt/homarr/data/configs
+    mv /opt/homarr-data-backup/db.sqlite /opt/homarr/database/db.sqlite
+    yarn db:migrate &>/dev/null
+    rm -rf /opt/homarr-data-backup
+    msg_ok "Restored Data"
 
-msg_info "Creating Service"
-cat <<EOF >/etc/systemd/system/homarr.service
-[Unit]
-Description=Homarr Service
-After=network.target
+    msg_info "Starting Services"
+    systemctl start homarr
+    msg_ok "Started Services"
+    msg_ok "Updated Successfully"
+  else
+    msg_ok "No update required. ${APP} is already at ${RELEASE}"
+  fi
+  exit
+}
 
-[Service]
-Type=exec
-WorkingDirectory=/opt/homarr
-EnvironmentFile=-/opt/homarr/.env
-ExecStart=/usr/bin/yarn start
+start
+build_container
+description
 
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl enable -q --now homarr.service
-msg_ok "Created Service"
-
-motd_ssh
-customize
-
-msg_info "Cleaning up"
-$STD apt-get -y autoremove
-$STD apt-get -y autoclean
-msg_ok "Cleaned"
+msg_ok "Completed Successfully!\n"
+echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
+echo -e "${INFO}${YW} Access it using the following URL:${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:3000${CL}"
